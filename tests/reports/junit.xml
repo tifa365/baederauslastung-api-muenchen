@@ -1,6 +1,0 @@
-<?xml version="1.0" encoding="utf-8"?>
-<testsuites errors="0" failures="0" skipped="0" tests="1" time="25.334061">
-  <testsuite name="schemathesis" hostname="tim-ThinkPad-X1-Carbon-5th" errors="0" failures="0" skipped="0" tests="1" time="25.334061">
-    <testcase name="GET /bath/visitorCount" time="25.334061" />
-  </testsuite>
-</testsuites>
