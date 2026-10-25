@@ -7,12 +7,7 @@ Inoffizielle OpenAPI-3.1-Beschreibung des JSON-Endpunkts, mit dem
 GET https://www.swm.de/.rest/bath/visitorCount?area_id=<id>
 ```
 
-| Datei | Zweck |
-|---|---|
-| `openapi.yaml` | Die Spezifikation (ein Endpunkt, alle Schemata, Randfälle, ID-Tabelle) |
-| `schemathesis.toml` | Konfiguration für den Live-Test (Base-URL, 4 req/s, keine TRACE-Probes) |
-| `tests/run-schemathesis.sh` | Startet den Live-Test gegen www.swm.de |
-| `tests/schemathesis-baseline.json` | Zwei akzeptierte, bekannte API-Eigenheiten |
+Die Spezifikation liegt in `openapi.yaml` (ein Endpunkt, alle Schemata, Randfälle, ID-Tabelle).
 
 ## Schnellstart
 
@@ -27,8 +22,8 @@ curl 'https://www.swm.de/.rest/bath/visitorCount?area_id='
 uvx openapi-spec-validator openapi.yaml
 npx -y @redocly/cli lint openapi.yaml
 
-# Live-Test
-tests/run-schemathesis.sh
+# Live-Test gegen die API (4 req/s, Methoden-Probes aus, da TRACE einen TCP-Reset auslöst)
+uvx schemathesis run openapi.yaml --url https://www.swm.de/.rest --rate-limit 4/s --checks all
 ```
 
 Freie Kapazität in Prozent, wie auf der SWM-Seite angezeigt:
@@ -57,8 +52,9 @@ Die vollständige Tabelle aller 28 bekannten `area_id`s mit `location_id` steht 
 
 **Bestätigt live:** Endpunkt, Methoden, alle 17 im Frontend genutzten IDs plus die 11 weiteren aus der
 Gesamtliste, Antwortschema (Felder, Typen, Pflichtfelder, keine Zusatzfelder), Randfälle, CORS, Caching.
-Schemathesis (`--checks all`, 77 generierte Fälle) fand keine Abweichung zwischen Spec und Server außer den zwei
-in der Baseline akzeptierten Punkten, die beide dokumentiertes Serververhalten sind.
+Schemathesis (`--checks all`, 77 generierte Fälle) fand keine Abweichung zwischen Spec und Server außer zwei
+Punkten, die beide dokumentiertes Serververhalten sind: HTTP 500 bei `area_id` ≤ 0 und HTTP 200 mit
+`return_code: exception` bei int64-Überlauf.
 
 **Abgeleitet, nicht bestätigt:**
 
