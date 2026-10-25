@@ -1,0 +1,341 @@
+openapi: 3.1.0
+info:
+  title: SWM M-Bäder Besucherzähler-API (inoffiziell)
+  version: 0.1.0
+  summary: Echtzeit-Auslastung der Münchner Hallenbäder, Freibäder und Saunen der Stadtwerke München (SWM).
+  description: |
+    Reverse-engineerte Dokumentation des JSON-Endpunkts, den die Seite
+    https://www.swm.de/baeder/auslastung (Web-Component `bath-capacity-item`) aufruft.
+    Es handelt sich **nicht** um eine offizielle oder garantierte Schnittstelle der SWM.
+
+    ## Verifizierte Fakten (Stand 2026-10-25, live getestet)
+
+    * Nur `GET` (und `HEAD`) werden akzeptiert. `POST`, `PUT`, `DELETE`, `OPTIONS` (ohne CORS-Preflight-Header)
+      liefern `401` ohne Body, `PATCH` liefert `403` ohne Body, `TRACE` führt zum Verbindungsabbruch (TCP reset).
+    * Keine Authentifizierung, keine Cookies, kein Referer und kein spezieller User-Agent nötig.
+    * Pfad ist case-sensitiv: `/.rest/bath/visitorcount` liefert `401`. Trailing Slash liefert `301`.
+    * Antwort ist `application/json;charset=UTF-8`, `Cache-Control: no-cache, no-store, must-revalidate, max-age=0`.
+    * **Caching-Falle:** Ein Aufruf **ganz ohne Query-String** (auch `?` allein) liefert einen von einem vorgelagerten
+      Cache ausgelieferten Snapshot (`Last-Modified` mehrere Stunden alt). Sobald irgendein Query-Parameter gesetzt ist
+      (`area_id=3`, `area_id=`, `x=1`, …), kommen Live-Daten. Für die Gesamtliste daher z. B. `?area_id=` verwenden.
+    * CORS: `Access-Control-Allow-Origin: https://www.swm.de` (exakt, kein `http://`, kein `swm.de` ohne `www`).
+      Ein syntaktisch gültiger, aber fremder `Origin`-Header ergibt `403 {"error": "Origin not allowed"}` (JSON);
+      ein leerer, `null`- oder ungültiger `Origin` ergibt `403` mit leerem `text/plain`-Body.
+      Serverseitige Aufrufe ohne `Origin` sind davon nicht betroffen.
+    * Der Backend-Controller ist PHP (`bs_etickets\com\controller\api::api_visitor_count(?int $area_id)`). Daraus
+      folgen die dokumentierten Randfälle: nicht-numerische Werte liefern HTTP 200 mit `return_code: exception`,
+      `0` und negative Werte liefern HTTP 500 (HTML-Fehlerseite), Fließkommawerte werden auf Integer gekürzt,
+      bei mehrfach übergebenem `area_id` gewinnt der **erste** Wert.
+    * Unbekannte oder aktuell geschlossene Areas liefern `data: []` mit HTTP 200. Das Frontend interpretiert
+      „Area nicht in der Antwort“ als „Aktuell geschlossen“.
+    * Das Frontend berechnet die angezeigte freie Kapazität als
+      `100 - round(customer_amount / customer_amount_max * 100)` Prozent. Es gibt kein Polling, nur einen Fetch beim Laden.
+
+    ## Datenmodell
+
+    Eine **Location** ist ein Bad (z. B. Michaelibad) und aggregiert `customer_amount` / `customer_amount_max`
+    über ihre **Areas** (Hallenbad, Freibad, Sauna). Wird nach `area_id` gefiltert, enthält die Location nur die
+    eine passende Area und die Location-Summen entsprechen dieser Area.
+  contact:
+    name: Projekt baederauslastung-muenchen
+  license:
+    name: Dokumentation CC0-1.0; Daten unterliegen den Nutzungsbedingungen der SWM
+    identifier: CC0-1.0
+externalDocs:
+  description: Offizielle Auslastungsseite der SWM
+  url: https://www.swm.de/baeder/auslastung
+
+security: []   # bewusst: keine Authentifizierung nötig
+
+servers:
+  - url: https://www.swm.de/.rest
+    description: Produktion (Magnolia CMS REST-Proxy der SWM-Website)
+
+tags:
+  - name: bath
+    description: Besucherzahlen der M-Bäder und M-Saunen
+
+paths:
+  /bath/visitorCount:
+    get:
+      tags: [bath]
+      operationId: getVisitorCount
+      summary: Aktuelle Besucherzahl und Kapazität je Bad / Bereich
+      description: |
+        Liefert die aktuelle Besucherzahl (`customer_amount`) und die maximale Kapazität (`customer_amount_max`)
+        pro Location und pro Area.
+
+        * Mit `area_id`: nur die Location, die diese Area enthält, mit genau dieser einen Area in `area_list`.
+          Unbekannte oder aktuell nicht betriebene Areas ergeben `data: []`.
+        * Ohne Wert (`?area_id=`) oder mit beliebigem anderem Parameter: alle aktuell betriebenen Locations
+          mit allen ihren Areas (Live-Daten).
+        * Ganz ohne Query-String: gecachter Snapshot, siehe Hinweis in der API-Beschreibung.
+      parameters:
+        - name: area_id
+          in: query
+          required: false
+          allowEmptyValue: true
+          description: |
+            Numerische ID des Bereichs (Area). Weglassen bzw. leer lassen, um alle Bereiche zu erhalten.
+
+            Bekannte IDs (aus der ungefilterten Antwort vom 2026-10-25; die mit * markierten werden auf
+            swm.de/baeder/auslastung angezeigt):
+
+            | location_id | Location                  | area_id | Area                              |
+            |------------:|---------------------------|--------:|-----------------------------------|
+            | 3           | Michaelibad               | 3*      | Michaelibad Hallenbad             |
+            |             |                           | 6       | Michaelibad Freibad               |
+            |             |                           | 9*      | Michaelibad Sauna                 |
+            |             |                           | 108     | MB - Sauna                        |
+            | 6           | Westbad                   | 12*     | Westbad Hallenbad                 |
+            |             |                           | 15      | Freibad West                      |
+            |             |                           | 18*     | Westbad Saunainsel                |
+            |             |                           | 105     | WB - Sauna                        |
+            | 9           | Dantebad                  | 30*     | Dante-Winter-Warmfreibad          |
+            |             |                           | 33*     | Dantebad Sauna                    |
+            |             |                           | 36      | Dantebad Freibad                  |
+            |             |                           | 102     | DB - Sauna                        |
+            | 33          | Cosimawellenbad           | 72*     | Cosimawellenbad Hallenbad         |
+            |             |                           | 75*     | Cosimawellenbad Sauna             |
+            |             |                           | 120     | CB - Sauna                        |
+            | 36          | Bad Giesing Harlaching    | 90*     | Hallenbad Bad Giesing-Harlaching  |
+            | 39          | Müller'sches Volksbad     | 84*     | Müller'sches Volksbad Hallenbad   |
+            |             |                           | 87*     | Müller'sches Volksbad Sauna       |
+            |             |                           | 114     | VB - Sauna                        |
+            | 42          | Nordbad                   | 60*     | Nordbad Hallenbad                 |
+            |             |                           | 63*     | Nordbad Sauna                     |
+            |             |                           | 117     | NB - Sauna                        |
+            | 45          | Olympia Schwimmhalle      | 66*     | Olympia Schwimmhalle Hallenbad    |
+            |             |                           | 69      | Olympia Schwimmhalle Sauna        |
+            |             |                           | 123*    | OSH - Sauna                       |
+            | 48          | Südbad                    | 78*     | Südbad Hallenbad                  |
+            |             |                           | 81*     | Südbad Sauna                      |
+            |             |                           | 111     | SB - Sauna                        |
+
+            Die Areas der Form „XX - Sauna“ (IDs 102–120) sind vermutlich zweite Zählstellen oder Alt-IDs der
+            jeweiligen Sauna; sie zeigten im Test durchgehend `customer_amount: 0`.
+
+            Randfälle (verifiziert): `0` oder negativ → HTTP 500 (HTML). Nicht-numerisch (`abc`, `3,9`, `3abc`)
+            → HTTP 200 mit `return_code: exception`. `3.5` → wie `3`. Werte > 2^63-1 überlaufen PHPs int und
+            liefern ebenfalls die Exception-Antwort. Nur der erste `area_id`-Wert wird ausgewertet.
+          schema:
+            type: integer
+            format: int64
+            minimum: 1
+            maximum: 9223372036854775807
+            examples: [3, 12, 66]
+        - name: Origin
+          in: header
+          required: false
+          description: |
+            Browser setzen diesen Header bei Cross-Origin-Requests automatisch. Jeder Wert außer
+            `https://www.swm.de` führt zu HTTP 403. Serverseitig einfach weglassen.
+          schema:
+            type: string
+            format: uri
+            examples: ["https://www.swm.de"]
+      responses:
+        "200":
+          description: |
+            Erfolg **oder** fachlicher Fehler. Beide Fälle kommen mit HTTP 200; unterscheiden über `return_code`.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VisitorCountResponse"
+              examples:
+                einzelneArea:
+                  summary: Gefiltert nach area_id=3 (Michaelibad Hallenbad)
+                  value:
+                    return_code: success
+                    data:
+                      - location_id: 3
+                        location_name: Michaelibad
+                        customer_amount: 92
+                        customer_amount_max: 570
+                        area_list:
+                          - area_id: 3
+                            area_name: Michaelibad Hallenbad
+                            customer_amount: 92
+                            customer_amount_max: 570
+                alleLocations:
+                  summary: Ungefiltert (gekürzt auf zwei Locations)
+                  value:
+                    return_code: success
+                    data:
+                      - location_id: 42
+                        location_name: Nordbad
+                        customer_amount: 99
+                        customer_amount_max: 722
+                        area_list:
+                          - area_id: 60
+                            area_name: Nordbad Hallenbad
+                            customer_amount: 66
+                            customer_amount_max: 432
+                          - area_id: 63
+                            area_name: Nordbad Sauna
+                            customer_amount: 33
+                            customer_amount_max: 145
+                          - area_id: 117
+                            area_name: NB - Sauna
+                            customer_amount: 0
+                            customer_amount_max: 145
+                      - location_id: 48
+                        location_name: Südbad
+                        customer_amount: 61
+                        customer_amount_max: 460
+                        area_list:
+                          - area_id: 78
+                            area_name: Südbad Hallenbad
+                            customer_amount: 33
+                            customer_amount_max: 360
+                          - area_id: 81
+                            area_name: Südbad Sauna
+                            customer_amount: 28
+                            customer_amount_max: 100
+                geschlossenOderUnbekannt:
+                  summary: area_id unbekannt oder Bereich aktuell geschlossen (z. B. area_id=9999)
+                  value:
+                    return_code: success
+                    data: []
+                exception:
+                  summary: Nicht-numerische area_id (z. B. area_id=abc)
+                  value:
+                    return_code: exception
+                    data:
+                      message: "bs_etickets\\com\\controller\\api::api_visitor_count(): Argument #2 ($area_id) must be of type ?int, string given, called in /data/modules/releases/base_modules/fw/6.9.38/lib/controller/base.class.php on line 106"
+        "403":
+          description: |
+            Cross-Origin-Anfrage mit nicht erlaubtem `Origin`-Header.
+
+            * `Origin` ist eine gültige URL, aber nicht `https://www.swm.de` → JSON-Body `{"error": "Origin not allowed"}`.
+            * `Origin` ist leer, `null` oder keine URL → leerer Body mit `text/plain;charset=UTF-8`.
+
+            (Auch die Methode `PATCH` liefert 403 ohne Body.)
+          headers:
+            Access-Control-Allow-Origin:
+              description: Nur im JSON-Fall gesetzt.
+              schema:
+                type: string
+                const: https://www.swm.de
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OriginError"
+              example:
+                error: Origin not allowed
+            text/plain:
+              schema:
+                type: string
+                maxLength: 0
+              example: ""
+        "500":
+          description: |
+            Interner Fehler, z. B. bei `area_id=0` oder negativen Werten. Body ist eine generische
+            HTML-Fehlerseite („www.swm.de - Error 500, internal error - ooops“), kein JSON.
+          content:
+            text/html:
+              schema:
+                type: string
+
+components:
+  schemas:
+    VisitorCountResponse:
+      description: Hülle jeder JSON-Antwort. `return_code` unterscheidet Erfolg und Fehler.
+      oneOf:
+        - $ref: "#/components/schemas/SuccessResponse"
+        - $ref: "#/components/schemas/ExceptionResponse"
+      discriminator:
+        propertyName: return_code
+        mapping:
+          success: "#/components/schemas/SuccessResponse"
+          exception: "#/components/schemas/ExceptionResponse"
+
+    SuccessResponse:
+      type: object
+      additionalProperties: false
+      required: [return_code, data]
+      properties:
+        return_code:
+          type: string
+          const: success
+        data:
+          type: array
+          description: Leer, wenn die angefragte Area unbekannt ist oder aktuell nicht betrieben wird.
+          items:
+            $ref: "#/components/schemas/Location"
+
+    ExceptionResponse:
+      type: object
+      additionalProperties: false
+      required: [return_code, data]
+      properties:
+        return_code:
+          type: string
+          const: exception
+        data:
+          type: object
+          additionalProperties: false
+          required: [message]
+          properties:
+            message:
+              type: string
+              description: Rohe PHP-Fehlermeldung des Backends.
+
+    Location:
+      type: object
+      description: Ein Bad (Standort) mit über alle enthaltenen Areas aggregierten Zahlen.
+      additionalProperties: false
+      required: [location_id, location_name, customer_amount, customer_amount_max, area_list]
+      properties:
+        location_id:
+          type: integer
+          minimum: 1
+          description: Stabile ID des Bades.
+          examples: [3, 42]
+        location_name:
+          type: string
+          examples: [Michaelibad, Nordbad, Müller'sches Volksbad]
+        customer_amount:
+          type: integer
+          minimum: 0
+          description: Summe der aktuellen Besucher über die enthaltenen Areas.
+        customer_amount_max:
+          type: integer
+          minimum: 0
+          description: Summe der maximalen Kapazitäten der enthaltenen Areas.
+        area_list:
+          type: array
+          minItems: 1
+          items:
+            $ref: "#/components/schemas/Area"
+
+    Area:
+      type: object
+      description: Ein Bereich innerhalb eines Bades (Hallenbad, Freibad, Sauna) mit eigener Zählstelle.
+      additionalProperties: false
+      required: [area_id, area_name, customer_amount, customer_amount_max]
+      properties:
+        area_id:
+          type: integer
+          minimum: 1
+          examples: [3, 60, 123]
+        area_name:
+          type: string
+          examples: [Michaelibad Hallenbad, Nordbad Sauna, OSH - Sauna]
+        customer_amount:
+          type: integer
+          minimum: 0
+          description: Aktuell anwesende Besucher.
+        customer_amount_max:
+          type: integer
+          minimum: 0
+          description: Maximale Kapazität. Freie Kapazität in Prozent = 100 - round(customer_amount / customer_amount_max * 100).
+
+    OriginError:
+      type: object
+      additionalProperties: false
+      required: [error]
+      properties:
+        error:
+          type: string
+          const: Origin not allowed
